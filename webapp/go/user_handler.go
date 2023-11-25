@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -88,32 +89,38 @@ type PostIconResponse struct {
 func getIconHandler(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	username := c.Param("username")
+	// セッションからユーザーIDを取得
+	sess, _ := session.Get(defaultSessionIDKey, c)
+	userID := sess.Values[defaultUserIDKey].(int64)
 
-	tx, err := dbConn.BeginTxx(ctx, nil)
+	// 最初にキャッシュをチェック
+	if img, found := getIconFromCache(userID); found {
+		return c.Blob(http.StatusOK, "image/jpeg", img)
+	}
+
+	// キャッシュにない場合はデータベースから取得
+	var img []byte
+	err := dbConn.QueryRowContext(ctx, "SELECT image FROM icons WHERE user_id = ?", userID).Scan(&img)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
-	}
-	defer tx.Rollback()
-
-	var user UserModel
-	if err := tx.GetContext(ctx, &user, "SELECT * FROM users WHERE name = ?", username); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusNotFound, "not found user that has the given username")
+		if err == sql.ErrNoRows {
+			return echo.NewHTTPError(http.StatusNotFound, "icon not found")
 		}
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user: "+err.Error())
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to query user icon: "+err.Error())
 	}
 
-	var image []byte
-	if err := tx.GetContext(ctx, &image, "SELECT image FROM icons WHERE user_id = ?", user.ID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return c.File(fallbackImage)
-		} else {
-			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get user icon: "+err.Error())
-		}
-	}
+	// キャッシュに保存
+	iconCache.Store(userID, img)
 
-	return c.Blob(http.StatusOK, "image/jpeg", image)
+	return c.Blob(http.StatusOK, "image/jpeg", img)
+}
+
+var iconCache sync.Map
+
+func getIconFromCache(userID int64) ([]byte, bool) {
+	if img, ok := iconCache.Load(userID); ok {
+		return img.([]byte), true
+	}
+	return nil, false
 }
 
 func postIconHandler(c echo.Context) error {
@@ -143,6 +150,8 @@ func postIconHandler(c echo.Context) error {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM icons WHERE user_id = ?", userID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete old user icon: "+err.Error())
 	}
+
+	iconCache.Store(userID, req.Image)
 
 	rs, err := tx.ExecContext(ctx, "INSERT INTO icons (user_id, image) VALUES (?, ?)", userID, req.Image)
 	if err != nil {
