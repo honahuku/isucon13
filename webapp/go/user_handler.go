@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -88,23 +89,34 @@ type PostIconResponse struct {
 
 func getIconHandler(c echo.Context) error {
 	ctx := c.Request().Context()
+	username := c.Param("username")
 
-	// セッションからユーザーIDを取得
-	sess, _ := session.Get(defaultSessionIDKey, c)
-	userID := sess.Values[defaultUserIDKey].(int64)
+	// ユーザー名からユーザーIDを取得
+	var userID int64
+	err := dbConn.QueryRowContext(ctx, "SELECT id FROM users WHERE username = ?", username).Scan(&userID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Printf("No user found for username=%s", username)
+			return echo.NewHTTPError(http.StatusNotFound, "user not found")
+		}
+		log.Printf("Error querying user ID: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to query user ID: "+err.Error())
+	}
 
-	// 最初にキャッシュをチェック
+	// キャッシュをチェック
 	if img, found := getIconFromCache(userID); found {
 		return c.Blob(http.StatusOK, "image/jpeg", img)
 	}
 
-	// キャッシュにない場合はデータベースから取得
+	// キャッシュにない場合はデータベースからアイコンを取得
 	var img []byte
-	err := dbConn.QueryRowContext(ctx, "SELECT image FROM icons WHERE user_id = ?", userID).Scan(&img)
+	err = dbConn.QueryRowContext(ctx, "SELECT image FROM icons WHERE user_id = ?", userID).Scan(&img)
 	if err != nil {
 		if err == sql.ErrNoRows {
+			log.Printf("No icon found for userID=%d", userID)
 			return echo.NewHTTPError(http.StatusNotFound, "icon not found")
 		}
+		log.Printf("Error querying user icon: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to query user icon: "+err.Error())
 	}
 
