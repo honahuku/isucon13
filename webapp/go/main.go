@@ -20,6 +20,8 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/labstack/echo-contrib/session"
 	echolog "github.com/labstack/gommon/log"
+	ddtrace "gopkg.in/DataDog/dd-trace-go.v1/contrib/labstack/echo.v4"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
 
 const (
@@ -119,8 +121,14 @@ func initializeHandler(c echo.Context) error {
 }
 
 func main() {
+	tracer.Start(
+		tracer.WithService("isucondition"),
+		tracer.WithEnv("host04"),
+	)
+	defer tracer.Stop()
 	e := echo.New()
 	e.Debug = true
+	e.Use(ddtrace.Middleware())
 	e.Logger.SetLevel(echolog.DEBUG)
 	e.Use(middleware.Logger())
 	cookieStore := sessions.NewCookieStore(secret)
