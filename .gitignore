@@ -5,9 +5,7 @@ local/*
 /env.sh
 .*
 !.gitignore
-webapp/img
 webapp/node
-webapp/pdns
 webapp/perl
 webapp/php
 webapp/public
